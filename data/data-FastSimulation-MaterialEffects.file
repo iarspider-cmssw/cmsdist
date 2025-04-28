@@ -1,0 +1,1 @@
+%define source0 http://cmsrep.cern.ch/cmssw/download/data/%{n}-%{realversion}.tar.gz

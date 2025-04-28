@@ -1,0 +1,337 @@
+### FILE rpm-preamble
+
+#When build with non-empty buildroot rpm runs some post scripts
+#to strip the binary. Following two definition avoid running those
+#scripts. These scripts were not doing anything in past as we always
+#built with empty buildroot.
+%define __os_install_post   %{nil}
+%define __spec_install_post %{nil}
+%define __spec_install_pre %{___build_pre}
+%define _empty_manifest_terminate_build         0
+%define _use_internal_dependency_generator     0
+%define _source_payload w9.gzdio
+%define _binary_payload w9.gzdio
+
+
+#disable running find-debuginfo.sh
+%define  debug_package %{nil}
+
+#disable generating /usr/lib/build-id files.
+%define _build_id_links none
+
+# Preliminarily define where things go.  These are the places we
+# know even without knowing the architecture yet.  
+# Note that we define the values all here, but some of them are
+# not actually usable until we've managed to defined %cmsplatf.
+#
+# "instroot" is the root of the private RPM package tree, it gets
+# both the RPM database as well as all the packages into it.  It
+# also has all the RPM standard dirs in it: SPECS, SOURCES, BUILD,
+# RPMS, SRPMS.  However we fudge those significantly to make sure
+# there is no chance data from packages or different platforms can
+# ever mix.
+#
+# Under the "instroot" there are other subtrees: external, lcg, cms.
+# External software is installed under the first, while LHC software
+# releases go under the others.  Which tree is used is determined by
+# install.sh from the group the spec belongs to.
+#
+# The default installation root is "/cms".  This can be changed,
+# e.g. from RPM command line, but currently only up to producing
+# binary RPMs.  The binaries are not relocatable (yet?).
+%if "%{?instroot:set}" != "set"
+%define instroot	/cms
+%endif
+
+%if "%{?cmsroot:set}" != "set"
+%define cmsroot        %instroot
+%endif
+
+%if "%{?tempprefix:set}" != "set"
+%define tempprefix        tmp
+%endif
+
+%if "%{?allpkgreqs:set}" != "set"
+%define allpkgreqs       %{pkgreqs}
+%endif
+
+%if "%{?builddirectpkgreqs:set}" != "set"
+%define builddirectpkgreqs       %{nil}
+%endif
+
+%ifarch x86_64
+%define cms_arch amd64
+%else
+%define cms_arch %{_arch}
+%endif
+
+# We define cmsbuildApiVersion to be 0 in the case we are not using 
+# a recent enough version of cmsBuild/install.sh, which does not
+# set cmsbuildApiVersion.
+%if "%{?cmsbuildApiVersion:set}" != "set"
+%define cmsbuildApiVersion 0
+%endif
+
+%define pkgdir		%{pkgcategory}/%{pkgname}/%{pkgversion}
+
+# Architecture comes first by default.  Run with "--define 'archfirst no'"
+# to change this.
+%if "%{?archfirst:set}" != "set"
+%define archfirst	yes
+%endif
+
+%if "%archfirst" == "yes"
+%define pkgrel		%{cmsplatf}/%{pkgdir}
+%else
+%define pkgrel		%{pkgdir}/%{cmsplatf}
+%endif
+
+%define pkginstroot	%{instroot}/%{pkgrel}
+
+%define _sourcedir	%{cmsroot}/SOURCES/%{pkgdir}
+%define _builddir	%{cmsroot}/BUILD/%{cmsplatf}/%{pkgdir}
+%define _specdir	%{cmsroot}/SPECS/%{pkgdir}
+# The new cmsBuild script puts packages in a directory structure that
+# includes the package checksum. This way it is possible to decide
+# what spec was used to build a given package.
+%if "%cmsbuildApiVersion" == "0"
+%define _rpmdir     %{cmsroot}/RPMS
+%define _srcrpmdir  %{cmsroot}/SRPMS
+%else
+%define _rpmdir     %{cmsroot}/RPMS/cache/%{specchecksum}
+%define _srcrpmdir  %{cmsroot}/SRPMS/cache/%{specchecksum}
+%endif
+%define _tmppath	%{cmsroot}/%{tempprefix}
+%define _topdir		%{cmsroot}
+
+%define _rpmfilename	%{cmsplatf}/%%{name}-%%{version}-%%{release}.%{cmsplatf}.rpm
+%define _srpmfilename	%%{name}-%%{version}-%%{release}.src.rpm
+
+# Old version of install.sh/cmsBuild.sh did not set the cmscompiler variable,
+# while cmsBuild does, in order to support compilers different other than
+# gcc. For this reason we add a check to avoid setting cmscompiler in 
+# the case we are using the new cmsBuild script. 
+%if "%{?cmscompiler:set}" != "set"
+%define cmscompiler	gcc
+%endif
+
+#set cmscompilerv only if not already set by cmsBuild
+%if "%{?cmscompilerv:set}" != "set"
+# Guess compiler version.  "gccver" is defined by install.sh when
+# producing the spec file from the version of the gcc spec.
+%if "%cmscompiler" == "gcc"
+%{expand:%%define cmscompilerv	%(echo %gccver | cut -d. -f1,2,3 | tr -d .)}
+%endif
+
+%if "%cmscompiler" != "gcc"
+%{expand:%%define cmscompilerv %(echo %compilerRealVersion | cut -d. -f1,2 | tr -d .)}
+%endif
+%endif
+
+# Define compiler platform version strings.  We use an external
+# script to determine platform name as RPM doesn't support multi-
+# line macros in spec files, only in "rpmmacros" files.
+%define debugsuffix %{?debug_build:_dbg}
+%define cmscomp	    	%{cmscompiler}%{cmscompilerv}
+
+%define cmsplatf    	%{cmsos}_%{cmscomp}%{debugsuffix}
+
+# Define the variable name for dynamic linker search path.
+%ifos darwin
+%define dynamic_path_var DYLD_FALLBACK_LIBRARY_PATH
+%define dynamic_lib_ext  dylib
+%else
+%define dynamic_path_var LD_LIBRARY_PATH
+%define dynamic_lib_ext  so
+%endif
+
+# We are now done with locations.  Move to other things.
+
+# Disable for Fedora
+%define __check_files   %{nil}
+%define debug_package   %{nil}
+
+# define ARCH {cmsplatf}?
+# No BuildRoot
+# No %buildsubdir
+# No Distribution:
+# No DistURL:
+# No %_excludedocs
+# No Packager:
+# No Provides:
+
+# Define a little helper scriptlet to source package inits from other
+# packages.  This allows cross-package environment setup to work while
+# building.  See above how we determine the list by parsing the spec
+# itself.
+%define drop_bootstrap_path export                PATH=$(echo                $PATH | tr ':' '\\n' | grep -v '/external/bootstrap-bundle/' | tr '\\n' ':' | sed 's|:*$||')
+%define drop_bootstrap_lib  export %{dynamic_path_var}=$(echo $%{dynamic_path_var} | tr ':' '\\n' | grep -v '/external/bootstrap-bundle/' | tr '\\n' ':' | sed 's|:*$||')
+%define disable_recursive_env %{drop_bootstrap_path}; %{drop_bootstrap_lib}; export _CMSBUILD_BUILD_ENV_=1
+%if "%archfirst" == "yes"
+%define initenv_all     %{disable_recursive_env} ; for x in %{allpkgreqs}                          .; do i=%{cmsroot}/%{cmsplatf}/$x/etc/profile.d/init.sh; [ -f $i ] && . $i; done
+%define initenv_direct1 %{disable_recursive_env} ; for x in %{directpkgreqs} %{builddirectpkgreqs} .; do i=%{cmsroot}/%{cmsplatf}/$x/etc/profile.d/init.sh; [ -f $i ] && . $i; done
+%else
+%define initenv_all     %{disable_recursive_env} ; for x in %{allpkgreqs}                          .; do i=%{cmsroot}/$x/%{cmsplatf}/etc/profile.d/init.sh; [ -f $i ] && . $i; done
+%define initenv_direct1 %{disable_recursive_env} ; for x in %{directpkgreqs} %{builddirectpkgreqs} .; do i=%{cmsroot}/$x/%{cmsplatf}/etc/profile.d/init.sh; [ -f $i ] && . $i; done
+%endif
+%define initenv_direct  %{initenv_direct1} %{?cmsdist_package_initenv: ; %{cmsdist_package_initenv}}
+%define initenv         %{initenv_all}     %{?cmsdist_package_initenv: ; %{cmsdist_package_initenv}}
+
+%if "%{?compiling_processes:set}" == "set"
+%define makeprocesses -j %compiling_processes 
+%else
+%define makeprocesses %{nil}
+%endif
+
+%if "%{?ignore_compile_errors:set}" == "set"
+%define compileOptions -k
+%else
+%define compileOptions %{nil}
+%endif
+
+# Define a macro for relocating configuration files in %%post section.
+%define relocateCmsFiles	perl -p -i -e "s|\\Q%{instroot}\\E|%{cmsroot}|g;s|\\Q%{cmsroot}\\E|$CMS_INSTALL_PREFIX|g"
+%define relocateRpmFiles	perl -p -i -e "s|\\Q%{instroot}\\E|%{cmsroot}|g;s|\\Q%{cmsroot}\\E|$RPM_INSTALL_PREFIX|g"
+%define reRelocateRpmFiles	perl -p -i -e "s|\\Q$CMS_INSTALL_PREFIX\\E|$RPM_INSTALL_PREFIX|g"
+%define reRelocateRpmPkg	perl -p -i -e "s|\\Q$CMS_INSTALL_PREFIX\\E|$RPM_INSTALL_PREFIX|g" $RPM_INSTALL_PREFIX/%{pkgrel}/
+%define relocateRpmPkg		perl -p -i -e "s|\\Q%{instroot}\\E|%{cmsroot}|g;s|\\Q%{cmsroot}\\E|$RPM_INSTALL_PREFIX|g" $RPM_INSTALL_PREFIX/%{pkgrel}/
+%define relocateCmsPkg		perl -p -i -e "s|\\Q%{instroot}\\E|%{cmsroot}|g;s|\\Q%{cmsroot}\\E|$CMS_INSTALL_PREFIX|g" $RPM_INSTALL_PREFIX/%{pkgrel}/
+%define relocateConfig		%relocateCmsPkg
+%define relocateConfigAll()     find $RPM_INSTALL_PREFIX/%{pkgrel}/%{1} -name '%{2}' -print -type f | xargs %{relocateCmsFiles}
+%define relocatePy3SitePackages \
+  for py in $(grep -RlI -m1 '^#\!.*python' %{i}/${PYTHON3_LIB_SITE_PACKAGES} | grep -v '\.pyc$') ; do \
+    lnum=$(grep -n -m1 '^#\!.*python' $py | sed 's|:.*||') \
+    sed -i -e "${lnum}c#!/usr/bin/env python3" $py \
+  done
+%define relocatePy2SitePackages \
+  for py in $(grep -RlI -m1 '^#\!.*python' %{i}/${PYTHON_LIB_SITE_PACKAGES} | grep -v '\.pyc') ; do \
+    lnum=$(grep -n -m1 '^#\!.*python' $py | sed 's|:.*||') \
+    sed -i -e "${lnum}c#!/usr/bin/env python" $py \
+  done
+
+#RunPath commands
+%define runpath_install \
+  script=${RPM_POPTEXEC_PATH}/set_runpath; \
+  if [ -e %{i}/etc/profile.d/set_runpath ] ; then script=%{i}/etc/profile.d/set_runpath; fi ;\
+  force_rpath=""; \
+  if [ "%{force_rpath}" = "true" ] ; then force_rpath='--force-rpath'; fi; \
+  . %{i}/etc/profile.d/init.sh; \
+  PATH="${RPM_POPTEXEC_PATH}:${PATH}" $script --prefix %{cmsroot}/%{cmsplatf} --package %{i} --jobs %{compiling_processes} %{?runpath_opts:%runpath_opts} ${force_rpath}
+
+# On macosx one needs to use the -x option, to avoid excessive stripping.
+%ifos darwin
+%define strip strip -x
+%else
+%define strip strip
+%endif
+
+# Generate dependencies-setup.{sh,csh} so init.{sh,csh} picks full environment.
+%define AutoSetupDependencies \
+if [ "%{?auto_dependencies}" != "no" ] ; then \
+if [ ! -e %i/etc/profile.d/dependencies-setup.sh ] ; then \
+mkdir -p %i/etc/profile.d \
+: > %i/etc/profile.d/dependencies-setup.sh \
+: > %i/etc/profile.d/dependencies-setup.csh \
+  echo 'if [ "X${_CMSBUILD_BUILD_ENV_}" = "X" ] ; then' >> %i/etc/profile.d/dependencies-setup.sh \
+  echo "  true" >> %i/etc/profile.d/dependencies-setup.sh \
+  for tool in $(echo %{requiredtools} | sed -e's|\s+| |;s|^\s+||'); do \
+    root=$(echo $tool | tr a-z- A-Z_)_ROOT; eval r=\\$$root \
+    if [ X"$r" != X ] && [ -r "$r/etc/profile.d/init.sh" ]; then \
+      echo "  test X\\$$root != X || . $r/etc/profile.d/init.sh" >> %i/etc/profile.d/dependencies-setup.sh \
+      echo "test \\$?$root != 0 || source $r/etc/profile.d/init.csh" >> %i/etc/profile.d/dependencies-setup.csh \
+    fi \
+  done \
+  echo "fi" >> %i/etc/profile.d/dependencies-setup.sh \
+  touch %i/etc/profile.d/.autodependencies \
+fi \
+fi
+
+#Relocate dependencies
+%define AutoSetupDependenciesRelocate \
+if [ -f $RPM_INSTALL_PREFIX/%{pkgrel}/etc/profile.d/.autodependencies ] ; then \
+  %{relocateConfig}etc/profile.d/dependencies-setup.sh \
+  %{relocateConfig}etc/profile.d/dependencies-setup.csh \
+fi
+#Some special urls to gets config.sub/cofngi.guess
+%define get_config_guess() curl -L -k -s -o %1 http://cmsrep.cern.ch/cmssw/download/config/config.guess
+%define get_config_sub()   curl -L -k -s -o %1 http://cmsrep.cern.ch/cmssw/download/config/config.sub
+
+#Use the following without {} e.g 'isos cc*' instead of '{isos} cc*'
+%define is_cmsos()    %(case %{cmsos} in (%{1}_*) echo 1 ;; (*) echo 0 ;; esac)
+%define is_ncmsos()   %(case %{cmsos} in (%{1}_*) echo 0 ;; (*) echo 1 ;; esac)
+%define is_cmsarch()  %(case %{cmsos} in (*_%{1}) echo 1 ;; (*) echo 0 ;; esac)
+%define is_ncmsarch() %(case %{cmsos} in (*_%{1}) echo 0 ;; (*) echo 1 ;; esac)
+
+%if 0%{!?without_cuda:1}
+%define cuda_gcc_support $(\
+  if [ ! -f %{_tmppath}/cache/cuda_gcc_supported.txt ] ; then \
+    touch %{_builddir}/cuda_gcc_supported.cu &&\
+    echo true > %{_builddir}/cuda_gcc_supported.txt &&\
+    (nvcc -dc %{_builddir}/cuda_gcc_supported.cu -o %{_builddir}/cuda_gcc_supported.cu.o 2>&1 || echo 'unsupported GCC version') > %{_builddir}/cuda_gcc_supported.log &&\
+    if [ $(grep -i 'unsupported ' %{_builddir}/cuda_gcc_supported.log | wc -l) -gt 0 ] ; then echo false > %{_builddir}/cuda_gcc_supported.txt ; fi;\
+    mv %{_builddir}/cuda_gcc_supported.txt %{_tmppath}/cache/cuda_gcc_supported.txt ;\
+  fi; cat %{_tmppath}/cache/cuda_gcc_supported.txt)
+%else
+%define cuda_gcc_support false
+%endif
+
+%define common_revision_script() \
+  OLD_REV=0 \
+  if [ -f %{2} ] ; then OLD_REV=$(grep '^#CMSDIST_FILE_REVISION=' %{2} | tail -1 | sed 's|.*=||;s| ||g') ; [ "${OLD_REV}" = "" ] && OLD_REV=0; fi \
+  NEW_REV=$(grep '^#CMSDIST_FILE_REVISION=' %{1} | tail -1 | sed 's|.*=||;s| ||g') \
+  if [ ${OLD_REV} -lt ${NEW_REV} ] ; then cp %{1} %{2}.tmp; mv %{2}.tmp %{2} ; fi
+
+%define cms_python2_major_version 2
+%define cms_python3_major_version 3
+%define cms_python2_minor_version %(echo %{allpkgreqs} | tr ' ' '\\n' | grep /python/ | cut -d/ -f3 | cut -f2 -d.)
+%define cms_python3_minor_version %(echo %{allpkgreqs} | tr ' ' '\\n' | grep /python3/ | cut -d/ -f3 | cut -f2 -d.)
+%define cms_python2_major_minor_version 2.%{cms_python2_minor_version}
+%define cms_python2_major_minor         2%{cms_python2_minor_version}
+%define cms_python3_major_minor_version 3.%{cms_python3_minor_version}
+%define cms_python3_major_minor         3%{cms_python3_minor_version}
+
+%if "%{?allow_version_suffix:set}" == "set"
+%define check_version_suffix echo "%%allow_version_suffix defined, skipping version suffix check."
+%else
+%define check_version_suffix \
+  if [ "%{pkgversion}" != "%{realversion}" ] ; then \
+    echo "ERROR: %{pkgversion} not same as %{realversion}. Automatic version suffix was added, please update the version explicitly for %{pkgname}.spec to avoid this error." ;\
+    exit 1 ;\
+  fi
+%endif
+
+%define cmake_prefix_path() $(for x in %{directpkgreqs}; do echo -n "%{cmsroot}/%{cmsplatf}/${x};"; done)
+
+#CMS Data packages can have download.url file with extra URLS to the data files.
+#This macro process those urls in download then in the data package
+%define process_download_url \
+  if [ -f download.url ] ; then \
+    for line in $(grep '=' download.url | grep -v '^ *#') ; do \
+      url=$(echo $line | cut -d= -f2-) && \
+      outfile=$(echo $url | sed 's|.*/||') &&\
+      rm -f ${outfile} &&\
+      curl -L -k -s -o ${outfile} ${url} &&\
+      if [ "$(echo $line | cut -d= -f1)" != "$(md5sum ${outfile}  | cut -d' ' -f1)" ] ; then exit 1; fi ;\
+    done ;\
+    rm -f download.url;\
+  fi
+
+#Enable debug mode for cmssw packages, e.g debug root, geant4, etc
+%if "%{?cms_debug_packages:set}" == "set"
+%define is_debug_build() %(if echo %{cms_debug_packages} | tr , '\\n' | grep -q '^%{1}$' ; then echo 1 ; else echo 0; fi)
+%else
+%define is_debug_build 0
+%endif
+
+%if %{is_debug_build %{pkgname}}
+%define cmake_build_type Debug
+%else
+%define cmake_build_type Release
+%endif
+
+%ifnarch x86_64
+%{!?without_rocm:%define without_rocm 1}
+%endif
+%{?without_cuda:%{!?without_gdrcopy:%define without_gdrcopy 1}}
+%{?without_cuda:%{!?without_cudnn:%define without_cudnn 1}}
+%{?without_rocm:%{!?without_rocm_rocrand:%define without_rocm_rocrand 1}}

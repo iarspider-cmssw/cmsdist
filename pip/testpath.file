@@ -1,0 +1,2 @@
+Requires: py3-flit
+%define patchsrc rm -f testpath/cli-*.exe

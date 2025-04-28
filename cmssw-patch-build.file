@@ -1,0 +1,89 @@
+%if "%{?baserel_postfix:set}" != "set"
+%define baserel_postfix %{nil}
+%endif
+
+%define isPatch               yes
+%define baserelver            %(echo %realversion | sed -e "s|_[[:alnum:]]*patch[[:digit:]][[:digit:]]*||")%{baserel_postfix}
+%define baserelname           %(echo %n | sed -e "s|-patch||")
+%define parent_release_fpath  %{cmsroot}/%{cmsplatf}/%{pkgcategory}/%{baserelname}/%{baserelver}
+%define must_have_packages    FWCore/Version
+
+%if "%{?baserelqueue:set}" != "set"
+%define baserelqueue	      %(echo %realversion | sed -e "s|_[[:alnum:]]*patch.*||")
+%endif
+
+%if "%{?prebuildtarget}" == "gindices"
+%define prebuildtarget        %{nil}
+%endif
+
+%define source1               cmstc://?tag=%{realversion}&module=CMSSW&export=src&baserelver=%{baserelver}&baserel=%{baserelqueue}&output=/src.tar.gz
+
+%define baserelverX           %(echo %{pkgreqs} | sed -e 's|.*/%baserelname/||' | awk '{print $1}')
+%define patchsrc9 \
+  if [ "X%{baserelverX}" != "X%{baserelver}" ] ; then \
+    echo "ERROR: Please define valid baserel_postfix e.g. -cms, which was added by cmsBuild for %baserelname base release, in %{n}.spec file.";\
+    false ;\
+  fi
+
+%if "%{?PartialBootstrapPatch:set}" == "set"
+%define                       PartialBootstrapPatch   %{nil}
+%endif
+
+%define PatchReleaseLink \
+  for SUBSYS in `ls -d %{parent_release_fpath}/$DIR/* | grep -v /__pycache__`; do \
+    if [ -d $SUBSYS ] ; then \
+      S=`basename $SUBSYS`; \
+      if [ -d $DIR/$S ] ; then \
+        for PKG in `ls -d $SUBSYS/[A-Za-z]*`; do \
+          P=`basename $PKG`;\
+          if [ ! -e $DIR/$S/$P ] ; then ln -s $SUBSYS/$P $DIR/$S/. ; fi;\
+        done;\
+      else ln -s $SUBSYS $DIR/. ;\
+      fi;\
+    fi; \
+  done
+
+%define RelocateReleaseLinks \
+  for L in `find $DIR -type l`; do \
+    lnk=`readlink -n $L 2>&1` ;\
+    case $lnk in \
+      %{cmsroot}/%{cmsplatf}/*) \
+         rl=`echo $L | sed -e 's|[^/]*/|../|g;' | xargs dirname` ;\
+         al=`echo $lnk | sed -e "s|^%{cmsroot}/%{cmsplatf}/|../../../$rl/|"`  ;\
+         rm -f $L  ;\
+         ln -sf  $al $L ;\
+         ;;  \
+     esac  ;\
+  done
+
+%define CopyPoisonDirectory \
+  if [ -d %{_builddir}/poison ] ; then cp -r %{_builddir}/poison %i ; fi
+
+%define PatchReleasePythonSymlinks \
+  %{CopyPoisonDirectory}; CWD=`/bin/pwd`; cd %i; %scramcmd b --verbose -f tmp/common/cache/python_symlinks </dev/null; DIR=python; %{PatchReleaseLink} ; cd $CWD;
+ 
+%define PatchReleaseSourceSymlinks \
+  CWD=`/bin/pwd`; cd %i; DIR=%{srctree}; %{PatchReleaseLink}; DIR=cfipython/%{cmsplatf}; %{PatchReleaseLink}; cd $CWD
+
+%define RelocatePatchReleaseSymlinks \
+  CWD=`/bin/pwd`; cd %i; DIR=%{srctree}; %{RelocateReleaseLinks}; DIR=cfipython/%{cmsplatf}; %{RelocateReleaseLinks}; DIR=python; %{RelocateReleaseLinks}; DIR=biglib/%{cmsplatf}; %{RelocateReleaseLinks}; cd $CWD; 
+
+%define PatchReleaseDependencyInfo \
+  for gz in $(find %{parent_release_fpath}/etc/dependencies -name '*.out.gz') ; do \
+    outfile=$(basename ${gz} | sed -e 's|\.gz$||') ;\
+    gunzip -c ${gz} > %i/etc/dependencies/${outfile}.all ;\
+    cat %i/etc/dependencies/${outfile} >> %i/etc/dependencies/${outfile}.all ;\
+    mv  %i/etc/dependencies/${outfile}.all %i/etc/dependencies/${outfile} ;\
+  done
+  
+%if "%{?must_have_packages:set}" == "set"
+%define PatchReleaseAdditionalPackages \
+  for PKG in %{must_have_packages}; do \
+    if [ ! -e $PKG ] ; then \
+      if [ -d %{parent_release_fpath}/%{srctree}/$PKG ] ; then \
+        mkdir -p `dirname $PKG`; \
+	cp -r %{parent_release_fpath}/%{srctree}/$PKG $PKG;\
+      fi;\
+    fi;\
+  done;
+%endif

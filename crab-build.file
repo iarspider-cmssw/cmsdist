@@ -1,0 +1,67 @@
+## NOCOMPILER
+## NO_AUTO_DEPENDENCY
+## NO_VERSION_SUFFIX
+%define crab_type %(echo %n | sed -e 's|crab-||')
+%if "%{?crabserver_packages:set}" != "set"
+  %define crabserver_packages ServerUtilities.py
+%endif
+
+Source0: git://github.com/dmwm/CRABClient.git?obj=master/%{crabclient_version}&export=CRABClient&output=/CRABClient-%{crabclient_version}.tar.gz
+Source1: git://github.com/dmwm/CRABServer.git?obj=master/%{crabserver_version}&export=CRABServer&output=/CRABServer-%{crabserver_version}.tar.gz
+
+%prep
+%{?check_version_suffix:%check_version_suffix}
+%setup -D -T -b 0 -n CRABClient
+%setup -D -T -b 1 -n CRABServer
+
+%build
+
+%install
+
+#Copy CRABClient
+rsync -a %{_builddir}/CRABClient/src/python/ %{i}/lib/
+sed -i -e 's|"development"|"%{crabclient_version}"|' %{i}/lib/CRABClient/__init__.py
+rsync -a %{_builddir}/CRABClient/bin/  %{i}/bin/
+rsync -a %{_builddir}/CRABClient/etc/  %{i}/etc/
+
+#List of CRAB python pakcages for which we need to create ProxyPackage symlink
+ls %{_builddir}/CRABClient/src/python/*/__init__.py | sed 's|/__init__.py$||;s|.*/||' > %{i}/etc/crab_py_pkgs.txt
+echo dbs >> %{i}/etc/crab_py_pkgs.txt
+echo RestClient >> %{i}/etc/crab_py_pkgs.txt
+
+#Create fake WMCore
+mkdir %{i}/lib/WMCore
+cp %{_builddir}/CRABClient/src/python/CRABClient/WMCoreConfiguration.py %{i}/lib/WMCore/Configuration.py 
+touch %{i}/lib/WMCore/__init__.py
+
+#Copy CRABServer
+for pkg in %{crabserver_packages} ; do
+  if [ -d %{_builddir}/CRABServer/src/python/${pkg} ] ; then
+    rsync -a %{_builddir}/CRABServer/src/python/${pkg} %{i}/lib/
+  else
+    cp %{_builddir}/CRABServer/src/python/${pkg} %{i}/lib/${pkg}
+  fi
+done
+
+#complete command in crab-bash-completion.sh should match '^\s*complete\s+-F\s+.*\s<Crab-function-Name>\s.*\scrab\s*$'
+COMPLETE_CMD=$(grep '^\s*complete\s\s*-F\s' %{i}/etc/crab-bash-completion.sh | grep '\scrab\s*$' | sed 's|-o\s\s*nosort||')
+if [ "${COMPLETE_CMD}" != "" ] ; then
+  CRAB_FUNC=$(echo "${COMPLETE_CMD}" | sed 's|^.*\s-F\s\s*||;s|\s.*||')
+  sed -i -e 's|^\s*complete\s\s*-F\s.*$|@COMPLETE_CMD@|' %{i}/etc/crab-bash-completion.sh
+  if [ "%{crab_type}" = "prod" ] ; then
+    COMPLETE_CMD=$(echo "${COMPLETE_CMD}" | sed "s/\scrab\s*$/ crab-%{crab_type}\\\n${COMPLETE_CMD}/")
+  else
+    COMPLETE_CMD=$(echo "${COMPLETE_CMD}" | sed 's/\scrab\s*$/ crab-%{crab_type}/')
+  fi
+  sed -i -e "s/@COMPLETE_CMD@/${COMPLETE_CMD}/;s|${CRAB_FUNC}|${CRAB_FUNC}_%{crab_type}|g" %{i}/etc/crab-bash-completion.sh
+else
+  echo "ERROR: Unable to fix crab use function _UseCrab"
+  exit 1
+fi
+
+%post
+cd ${RPM_INSTALL_PREFIX}
+mkdir -p share/%{pkgdir}
+for dir in bin lib etc; do
+  rsync -a %{pkgrel}/${dir}/ share/%{pkgdir}/${dir}/
+done

@@ -1,0 +1,63 @@
+### FILE cmssw-queue-override
+## NO_AUTO_RUNPATH
+## NO_VERSION_SUFFIX
+## UPLOAD_DEPENDENCIES dqmgui
+%if "%(case %realversion in (*_COVERAGE_X*) echo true ;; (*) echo false ;; esac)" == "true"
+%define release_usercxxflags    -fprofile-arcs -ftest-coverage
+%endif
+
+%if "%(case %realversion in (*_DEBUG_X*) echo true ;; (*) echo false ;; esac)" == "true"
+%define gitcommit       %(echo %realversion | sed -e 's|_DEBUG_X|_X|')
+%endif
+
+%if "%(case %realversion in (*_EXPERIMENTAL_X*) echo true ;; (*) echo false ;; esac)" == "true"
+%define release_usercxxflags    -O3 -ffast-math -freciprocal-math -fipa-pta
+%endif
+
+%if "%(case %realversion in (*_DBG_X*) echo true ;; (*) echo false ;; esac)" == "true"
+%ifarch ppc64le
+%define usercxxflags    -g
+%else
+%define release_usercxxflags    -g -DEDM_ML_DEBUG
+%endif
+%endif
+
+%if "%(case %realversion in (*_CMSDEPRECATED_X*) echo true ;; (*) echo false ;; esac)" == "true"
+%define release_usercxxflags -DUSE_CMS_DEPRECATED
+%endif
+
+%if "%(case %realversion in (*_FORTIFIED_X*) echo true ;; (*) echo false ;; esac)" == "true"
+%define release_usercxxflags    -fexceptions -fstack-protector-all --param=ssp-buffer-size=4 -Wp,-D_FORTIFY_SOURCE=2
+%endif
+
+%if "%(case %realversion in (*UBSAN*) echo true ;; (*) echo false ;; esac)" == "true"
+%define release_usercxxflags    -g
+%endif
+
+%if "%(case %realversion in (*_ICC_X*) echo true ;; (*) echo false ;; esac)" == "true"
+%define gitcommit       %(echo %realversion | sed -e 's|_ICC_X|_X|')
+%define scram_compiler  icc
+%define extra_tools     icc-cxxcompiler icc-f77compiler icc-ccompiler
+%endif
+
+%if "%(case %realversion in (*_CLANG*) echo true ;; (*) echo false ;; esac)" == "true"
+%define scram_compiler  llvm
+%define extra_tools     llvm-cxxcompiler llvm-f77compiler llvm-ccompiler
+%endif
+
+%if "%(case %realversion in (*CXXMODULE*) echo true ;; (*) echo false ;; esac)" == "true"
+Source20: CXXModules.mk
+%define patchsrc20     cp %{_sourcedir}/CXXModules.mk config/SCRAM/GMake/CXXModules.mk
+%endif
+
+%if "%(case %realversion in (*MULTIARCH*) echo true ;; (*) echo false ;; esac)" == "true"
+%define scram_target_default auto
+%endif
+
+%if "%(case %realversion in (*SKYLAKE*) echo true ;; (*) echo false ;; esac)" == "true"
+%define scram_target_default auto
+%endif
+
+%if "%(case %realversion in (*NOOFAST*) echo true ;; (*) echo false ;; esac)" == "true"
+%define remove_tools ofast-flag
+%endif

@@ -1,0 +1,2 @@
+%define PipPreBuild export PYCURL_SSL_LIBRARY=openssl
+Requires: curl

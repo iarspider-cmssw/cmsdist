@@ -1,0 +1,184 @@
+### FILE scram-tool-conf-src
+## NOCOMPILER
+## NO_AUTO_RUNPATH
+## NO_AUTO_DEPENDENCY
+## INCLUDE toolflags
+## INCLUDE microarch_flags
+%define auto_dependencies no
+%define uctool %(echo %{n} | tr '[a-z-]' '[A-Z_]')
+BuildRequires: SCRAMV1
+Source99: scram-tools
+Source: none
+
+%if "%{package_vectorization}"
+%if "%{?vectorized_packages:set}" != "set"
+%define vectorized_packages %{nil}
+%else
+%{expand:%(i=90; for v in %{package_vectorization}; do let i=$i+1 ; echo Source${i}: vectorization/$v; done)}
+%endif
+%endif
+
+%prep
+%build
+
+#   requiredtools	Tools for which we need to collect the SCRAMToolBox toolfiles
+#                  	(This is automatically set by install.sh script)
+#   skipreqtools	Do not add these tools in selected directory
+
+%install
+rm -rf %i
+mkdir -p %{i}/tools/selected %{i}/tools/available
+
+%if "%{?skipreqtools:set}" != "set"
+%define skipreqtools %{nil}
+%endif
+
+## INCLUDE scram-tools.file/tool-env
+for tool in %requiredtools %{?use_system_gcc:gcc}; do
+  echo ">> Copying tool files from: $tool"
+  uctool=`echo $tool | tr '[a-z-]' '[A-Z_]'`
+  toolbase=`eval echo \\$${uctool}_ROOT`
+  toolver=`eval echo \\$${uctool}_VERSION`
+  %{_sourcedir}/scram-tools/bin/get_tools "$toolbase" "$toolver" %i "${tool}"
+done
+%{_sourcedir}/scram-tools/bin/get_tools "" "system" %i "systemtools"
+
+%if "%{package_vectorization}"
+%if "%{vectorized_packages}"
+echo %{vectorized_packages} > %i/vectorized_packages.txt
+for vec in %{package_vectorization}; do \
+  ucvec=`echo $vec | tr '[a-z-]' '[A-Z_]'`
+  for tool in %{vectorized_packages}; do \
+    uctool=`echo $tool | tr '[a-z-]' '[A-Z_]'`
+    toolbase=`eval echo \\$${uctool}_${ucvec}_ROOT`
+    toolver=`eval echo \\$${uctool}_${ucvec}_VERSION`
+    %{_sourcedir}/scram-tools/bin/get_vectorized_tools "$toolbase" "$toolver" %i "${tool}" "${vec}"
+  done
+  if [ -f %i/tools/selected/gcc-cxxcompiler.xml ] ; then
+    f=$(%{cmsdist_directory}/vectorization/cmsdist_packages.py $vec)
+    sed -i -e "s# *</tool>#    <flags CXXFLAGS_TARGETS_${ucvec}=\"${f}\"/>\n    <flags REM_CXXFLAGS_TARGETS_${ucvec}=\"%{default_microarch}\"/>\n  </tool>#" %i/tools/selected/gcc-cxxcompiler.xml
+  fi
+done
+%endif
+%endif
+
+for stool in $(echo %skipreqtools | tr '[A-Z]' '[a-z]') ; do
+  [ -f %i/tools/selected/${stool}.xml ] || continue
+  mv %i/tools/selected/${stool}.xml %i/tools/available
+done
+  
+if [ -e $SCRAMV1_ROOT/bin/chktool ] ; then
+  touch %i/errors.log
+  find %i/tools -name '*.xml' -type f | (xargs $SCRAMV1_ROOT/bin/chktool >> %i/errors.log 2>&1 || true)
+  if [ $(grep 'ERROR:' %i/errors.log | wc -l) -gt 0 ] ; then
+    cat %i/errors.log
+    exit 1
+  fi
+  rm -f %i/errors.log
+fi
+
+echo '<tool name="python-paths" version="1.0" revision="1">' > %{i}/tools/selected/python-paths.xml
+
+if [ "${PYTHON3PATH}" != "" ] ; then
+  py3List=`echo ${PYTHON3PATH} | tr ':' '\n'`
+  mkdir -p %{i}/${PYTHON3_LIB_SITE_PACKAGES}
+  touch %{i}/${PYTHON3_LIB_SITE_PACKAGES}/tool-deps.pth
+  for pkg in ${py3List} ; do
+     echo "adding $pkg"
+     echo "$pkg" >> %{i}/${PYTHON3_LIB_SITE_PACKAGES}/tool-deps.pth
+  done
+  echo '  <runtime name="PYTHON3PATH"  value="%{i}/'${PYTHON3_LIB_SITE_PACKAGES}'" type="path"/>' >> %{i}/tools/selected/python-paths.xml
+fi
+
+%if "%{package_vectorization}"
+%if "%{vectorized_packages}"
+for pth in %{i}/${PYTHON3_LIB_SITE_PACKAGES}/tool-deps.pth ; do
+  [ -f ${pth} ] ||  continue
+  dir=$(dirname $pth)
+  for tool in %{vectorized_packages} ; do
+    for vec in %{package_vectorization} ; do
+      uctool=`echo ${tool}_${vec}_ROOT | tr '[a-z-]' '[A-Z_]'`
+      toolbase=`eval echo \\$${uctool}`
+      if [ $(grep "${toolbase}/" ${pth} |wc -l) -gt 0 ] ; then
+        mkdir -p ${dir}/scram_${vec}
+        grep "${toolbase}/" ${pth} >> ${dir}/scram_${vec}/tool-deps.pth
+        sed -i -e "\#^${toolbase}#d" ${pth}
+      fi
+    done
+  done
+done
+for vec in default %{package_vectorization} ; do
+  xvar=`echo ${vec}_${vec}_ROOT | tr '[a-z-]' '[A-Z_]'`
+  for item in PYTHON3PATH:${PYTHON3_LIB_SITE_PACKAGES} ; do
+    pydir=$(echo $item | sed 's|.*:||')
+    dir=%{i}/${pydir}/${vec}
+    [ "${vec}" != "default" ] && dir=%{i}/${pydir}/scram_${vec}
+    [ -f ${dir}/tool-deps.pth ] ||  continue
+    var=$(echo $item | sed 's|:.*||')
+    xvar=`echo ${vec}_${var} | tr '[a-z-]' '[A-Z_]'`
+    echo '  <runtime name="'${xvar}'"  value="'${dir}'" type="path"/>' >> %{i}/tools/selected/python-paths.xml
+  done
+done
+%endif
+%endif
+
+echo '</tool>' >> %{i}/tools/selected/python-paths.xml
+
+ALL_PY_BIN=""
+ALL_PY_BIN_PKGS=""
+for pkg in  $(echo %{allpkgreqs} | tr ' ' '\n' | grep '/py[23]-') ; do
+  pk_name=$(echo $pkg | cut -d/ -f2 | tr '[A-Z]' '[a-z]')
+  if [ -f %{i}/tools/selected/${pk_name}.xml ] ; then continue ; fi
+  pk_ver=$(echo $pkg | cut -d/ -f3)
+  uctool=`echo ${pk_name} | tr '[a-z-]' '[A-Z_]'`
+  echo "<tool name=\"$pk_name\" version=\"$pk_ver\" revision=\"1\">" > %{i}/tools/selected/${pk_name}.xml
+  if [ -e %{cmsroot}/%{cmsplatf}/$pkg/bin ] ; then
+    for b in $(ls %{cmsroot}/%{cmsplatf}/$pkg/bin) ; do
+      ALL_PY_BIN="${ALL_PY_BIN} ${b}"
+      ALL_PY_BIN_PKGS="${ALL_PY_BIN_PKGS} ${b}:${pk_name}"
+    done
+    echo "  <client>" >> %{i}/tools/selected/${pk_name}.xml
+    echo "    <environment name=\"${uctool}_BASE\" default=\"%{cmsroot}/%{cmsplatf}/$pkg\"/>" >> %{i}/tools/selected/${pk_name}.xml
+    echo "  </client>" >> %{i}/tools/selected/${pk_name}.xml
+    echo "  <runtime name=\"PATH\" value=\"\$${uctool}_BASE/bin\" type=\"path\"/>" >> %{i}/tools/selected/${pk_name}.xml
+  fi
+  echo "</tool>" >> %{i}/tools/selected/${pk_name}.xml
+done
+DUP_BIN=$(echo "${ALL_PY_BIN}" | tr ' ' '\n' | grep -v '__pycache__' | sort | uniq -c | sed 's|^\s*||' | grep -v '^1 ' | sed 's|^.* ||')
+
+set +x
+if [ "${DUP_BIN}" != "" ] ; then
+  for p in ${DUP_BIN} ; do
+    echo ${ALL_PY_BIN_PKGS} | tr ' ' '\n' | grep "^${p}:"
+  done
+  echo "ERROR: Duplicate python binaries found. Please cleanup and make sure only one binary is available."
+  exit 1
+fi
+set -x
+if [ -e %{i}/tools/selected/cuda-gcc-support.xml ] ; then
+  if [ "%{cuda_gcc_support}" != "true" ] ; then
+    rm -f %{i}/tools/selected/cuda-gcc-support.xml
+    echo "WARNING: CUDA does not support this GCC version, removing cuda-gcc-support.xml tool file"
+  fi
+fi
+
+mkdir -p %{i}/tools
+for type in selected available ; do
+  rm -f %{i}/tools/${type}.tmpl
+  touch %{i}/tools/${type}.tmpl
+  [ -d %{i}/tools/${type} ] || continue
+  for xml in $(ls %{i}/tools/${type}/*.xml) ; do
+    tool=$(basename $xml)
+    echo "cat << \\EOF_TOOLFILE >> %%{i}/tools/${type}/${tool}" >> %{i}/tools/${type}.tmpl
+    cat $xml            >> %{i}/tools/${type}.tmpl
+    echo "EOF_TOOLFILE" >> %{i}/tools/${type}.tmpl
+    echo ""             >> %{i}/tools/${type}.tmpl
+  done
+  rm -rf %{i}/tools/${type}
+done
+
+%post
+echo "%{uctool}_ROOT='$CMS_INSTALL_PREFIX/%{pkgrel}'"     > $RPM_INSTALL_PREFIX/%{pkgrel}/etc/profile.d/init.sh
+echo "set %{uctool}_ROOT='$CMS_INSTALL_PREFIX/%{pkgrel}'" > $RPM_INSTALL_PREFIX/%{pkgrel}/etc/profile.d/init.csh
+[ -d $RPM_INSTALL_PREFIX/%{pkgrel}/tools ] && %{relocateCmsFiles} $(find $RPM_INSTALL_PREFIX/%{pkgrel}/tools -type f)
+[ -d $RPM_INSTALL_PREFIX/%{pkgrel}/lib ]   && %{relocateCmsFiles} $(find $RPM_INSTALL_PREFIX/%{pkgrel}/lib -type f)

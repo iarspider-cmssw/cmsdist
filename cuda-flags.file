@@ -1,0 +1,50 @@
+### FILE cuda-flags
+## INCLUDE cpp-standard
+# define the CUDA compilation flags in a way that can be shared by SCRAM-based and regular tools
+
+# build support for Pascal (6.x), Volta (7.0), Turing (7.5), Ampere (8.x), Lovelace (8.9) and Hopper (9.0)
+%define cuda_arch 60 70 75 80 89 90
+
+# LIBOMPTARGET_NVPTX_COMPUTE_CAPABILITIES style for listing the supported CUDA compute architectures
+%define omptarget_cuda_archs %(echo $(for ARCH in %cuda_arch; do echo "$ARCH"; done) | sed -e"s/ /,/g")
+
+# LLVM style for listing the supported CUDA compute architectures
+%define llvm_flags_cuda_archs %(echo $(for ARCH in %cuda_arch; do echo "--offload-arch=sm_$ARCH"; done)) -Wunknown-cuda-version
+
+# C++ standard to use for building host and device code with nvcc
+%define nvcc_flags_stdcxx -std=c++%{cms_cxx_standard}
+
+# generate optimised code
+%define nvcc_flags_opt -O3
+
+# generate debugging information for device code
+%define nvcc_flags_debug --generate-line-info --source-in-ptx --display-error-number
+
+# imply __host__, __device__ attributes in constexpr functions
+%define nvcc_flags_constexpr --expt-relaxed-constexpr
+
+# allow __host__, __device__ attributes in lambda declaration
+%define nvcc_flags_lambda --extended-lambda
+
+# build support for the various compute architectures
+%define nvcc_flags_cuda_archs %(echo $(for ARCH in %cuda_arch; do echo "-gencode arch=compute_$ARCH,code=[sm_$ARCH,compute_$ARCH]"; done)) -Wno-deprecated-gpu-targets
+
+# various cuda diag-suppress flags e.g.
+#   3012: suppress volatile destination type for a compound assignment expression is deprecated
+#   3189: suppress "module" is parsed as an identifier rather than a keyword because the tokens that follow it do not match those of a preprocessor directive
+%define nvcc_flags_cuda_diag_suppress -diag-suppress=3012 -diag-suppress=3189
+
+# disable warnings about attributes on defaulted methods
+%define nvcc_flags_cudafe_diag -Xcudafe --diag_suppress=esa_on_defaulted_function_ignored
+
+# override the version of GCC passed to cudafe++
+%define override_gnu_version $(gcc -dumpfullversion | { IFS=.; read MAJOR MINOR PATCH; echo $(((MAJOR * 100 + MINOR) * 100)); })
+%define nvcc_flags_gnu_version -Xcudafe --gnu_version=%{override_gnu_version}
+
+# link the CUDA runtime shared library
+%define nvcc_flags_cudart --cudart shared
+
+# collect all CUDA flags
+%define nvcc_cuda_flags \
+  %{nvcc_flags_stdcxx} %{nvcc_flags_opt} %{nvcc_flags_debug} %{nvcc_flags_constexpr} %{nvcc_flags_lambda} \
+  %{nvcc_flags_cuda_archs} %{nvcc_flags_cuda_diag_suppress} %{nvcc_flags_cudafe_diag} %{nvcc_flags_gnu_version} %{nvcc_flags_cudart}
